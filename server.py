@@ -1,11 +1,17 @@
 import socket
 import random
 
+from events.game_lost_event import GameLostEvent
+from events.game_over_event import GameOverEvent
+from events.game_won_event import GameWonEvent
+from events.player_turn_event import PlayerTurnEvent
 from events.event_base import Event
 from events.event_utils import decode_event, encode_event
-from events.generic_game_update_event import GenericGameUpdateEvent
+from events.host_message_event import HostMessageEvent
 from events.player_invitation_acceptance_event import PlayerInvitationAcceptanceEvent
 from events.player_invitation_event import PlayerInvitationEvent
+from events.player_played_turn_event import PlayerPlayedTurnEvent
+from exceptions.unexpected_event_exception import UnexpectedEventException
 from game_config import words, NO_OF_PLAYERS, HOST_PORT
 from models.hangman_player import HangmanPlayer
 from models.player_connection import PlayerConnection
@@ -52,75 +58,68 @@ def main():
         next_player_id_to_propose += 1
         print("Waiting for invitation to get accepted...")
         polled_event = poll_client_event(player_socket)
-        if isinstance(polled_event, PlayerInvitationAcceptanceEvent):
-            print(f"Player accepted the game invitation. Player name is {polled_event.player_name}")
-            # register player for game
-            connected_players[polled_event.invitation_event.proposed_player_id] = PlayerConnection(player_socket,
-                                                                                                   HangmanPlayer(
-                                                                                                       polled_event.invitation_event.proposed_player_id,
-                                                                                                       polled_event.player_name))
-            # send game lobby update event to all the players
-            lobby_update_message = f"HOST_MESSAGE:: In Lobby {', '.join(get_connected_players_names())}."
-            players_remaining_to_join = NO_OF_PLAYERS - len(connected_players)
-            if players_remaining_to_join <= 0:
-                lobby_update_message = f"{lobby_update_message} All players have joined."
-            else:
-                lobby_update_message = f"{lobby_update_message} Waiting for {players_remaining_to_join} players to join."
-            broadcast_event_to_all_players(GenericGameUpdateEvent(
-                update_message=lobby_update_message))
+        if not isinstance(polled_event, PlayerInvitationAcceptanceEvent):
+            raise UnexpectedEventException(expected_event_type=PlayerInvitationAcceptanceEvent)
+        print(f"Player accepted the game invitation. Player name is {polled_event.player_name}")
+        # register player for game
+        connected_players[polled_event.invitation_event.proposed_player_id] = PlayerConnection(player_socket,
+                                                                                               HangmanPlayer(
+                                                                                                   polled_event.invitation_event.proposed_player_id,
+                                                                                                   polled_event.player_name))
+        # send game lobby update event to all the players
+        lobby_update_message = f"HOST: In Lobby {', '.join(get_connected_players_names())}."
+        players_remaining_to_join = NO_OF_PLAYERS - len(connected_players)
+        if players_remaining_to_join <= 0:
+            lobby_update_message = f"{lobby_update_message} All players have joined."
         else:
-            print(f"Unexpected event received, was expecting {PlayerInvitationEvent.__name__}")
+            lobby_update_message = f"{lobby_update_message} Waiting for {players_remaining_to_join} players to join."
+        broadcast_event_to_all_players(HostMessageEvent(
+            update_message=lobby_update_message))
 
     # Generate the word for the game
     word = get_word()
+    print(f"Selected word for game is {word}")
 
-    # send game started event to all players
+    game_start_message = f"HOST: Game has started. You have to guess a word of {len(word)} characters."
+    broadcast_event_to_all_players(HostMessageEvent(update_message=game_start_message))
 
-    # Create a list of underscores to represent the unknown letters in the word
-    word_display = ["_"] * len(word)
+    game_completed = False
+    # Play turns of each player
+    while not game_completed:
+        for player_connection in connected_players.values():
+            current_player = player_connection.player
+            current_player_socket = player_connection.socket
+            # tell all the players who is playing the current turn
+            player_turn_message = f"HOST: {current_player.player_name} is playing the turn.."
+            broadcast_event_to_all_players(HostMessageEvent(player_turn_message))
+            # send play turn event to current player
+            send_client_event(current_player_socket, PlayerTurnEvent(current_player.get_word_guessed_so_far(word)))
+            # wait for player to complete the turn
+            player_turn_event = poll_client_event(current_player_socket)
+            if not isinstance(player_turn_event, PlayerPlayedTurnEvent):
+                raise UnexpectedEventException(expected_event_type=PlayerPlayedTurnEvent)
+            # mark player played guess
+            current_player.consider_guess(player_turn_event.guessed_character)
+            # check if player has won the game
+            if current_player.has_guessed_all(word):
+                # announce game winner name
+                game_winner_announcement_message = f"HOST: {current_player.player_name} has won the game!!!"
+                broadcast_event_to_all_players(HostMessageEvent(update_message=game_winner_announcement_message))
+                # send game win event to current player
+                send_client_event(current_player_socket, GameWonEvent())
+                # send game lost event to other players
+                for connected_player in connected_players.values():
+                    if connected_player.player.player_id != current_player.player_id:
+                        send_client_event(connected_player.socket, GameLostEvent())
+                # send game over event to all
+                broadcast_event_to_all_players(GameOverEvent())
+                game_completed = True
+                break
 
-    # # Keep track of the number of incorrect guesses
-    # incorrect_guesses = 0
-    #
-    # # Keep playing until the word is guessed or the maximum number of incorrect guesses is reached
-    # while "_" in word_display and incorrect_guesses < MAX_INCORRECT_GUESSES:
-    #     # Send the current state of the game to all players
-    #     for player_socket in player_sockets:
-    #         player_socket.sendall(str.encode(" ".join(word_display)))
-    #
-    #     # Get the guess from the player
-    #     guess = player_sockets[0].recv(1024).decode()
-    #     print("Player 1 guesses:", guess)
-    #
-    #     # Check if the guess is correct
-    #     if guess in word:
-    #         # Update the display with the guessed letter
-    #         for i in range(len(word)):
-    #             if word[i] == guess:
-    #                 word_display[i] = guess
-    #     else:
-    #         # Increment the number of incorrect guesses
-    #         incorrect_guesses += 1
-    #         print("Incorrect guess. You have", MAX_INCORRECT_GUESSES - incorrect_guesses, "guesses left.")
-    #
-    #     # Rotate the player sockets list so that the next player gets to guess
-    #     player_sockets.append(player_sockets.pop(0))
-    #
-    #     # Check if the game is over
-    #     if "_" not in word_display:
-    #         # Notify all players that the game has ended and who won
-    #         for player_socket in player_sockets:
-    #             player_socket.sendall(str.encode("Game over! Player 1 wins! The word was " + word))
-    #     elif incorrect_guesses == MAX_INCORRECT_GUESSES:
-    #         # Notify all players that the game has ended and who won
-    #         for player_socket in player_sockets:
-    #             player_socket.sendall(
-    #                 str.encode("Game over! Player " + str(len(player_sockets)) + " wins! The word was " + word))
-    #
-    # # Close the sockets
-    # for player_socket in player_sockets:
-    #     player_socket.close()
-    # server_socket.close()
+    # Close the sockets
+    for player_connection in connected_players.values():
+        player_connection.socket.close()
+    server_socket.close()
 
 
 if __name__ == '__main__':
