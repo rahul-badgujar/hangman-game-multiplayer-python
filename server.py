@@ -3,9 +3,10 @@ import random
 
 from events.event_base import Event
 from events.event_utils import decode_event, encode_event
+from events.generic_game_update_event import GenericGameUpdateEvent
 from events.player_invitation_acceptance_event import PlayerInvitationAcceptanceEvent
 from events.player_invitation_event import PlayerInvitationEvent
-from game_config import words, NO_OF_PLAYERS
+from game_config import words, NO_OF_PLAYERS, HOST_PORT
 from models.hangman_player import HangmanPlayer
 from models.player_connection import PlayerConnection
 
@@ -17,29 +18,37 @@ def get_word():
 def main():
     server_socket = socket.socket()
     host = socket.gethostname()
-    port = 10001
+    port = HOST_PORT
     server_socket.bind((host, port))
     print(f"New Hangman Game started at {host}:{port}")
     # Listen for incoming connections
     server_socket.listen(NO_OF_PLAYERS)
 
+    # To store connections from players
+    connected_players = dict()
+
     def send_client_event(client_socket: socket, event: Event):
         client_socket.sendall(encode_event(event))
 
+    def broadcast_event_to_all_players(event: Event):
+        for player_connection in connected_players.values():
+            send_client_event(player_connection.socket, event)
+
     def poll_client_event(client_socket: socket):
-        received_data = client_socket.recv(1024).decode('utf-8')
+        received_data = client_socket.recv(1024)
         return decode_event(received_data)
+
+    def get_connected_players_names():
+        return [hangman_player.player.player_name for hangman_player in connected_players.values()]
 
     print("Waiting for players to join...")
 
-    # Accept connections from players
-    connected_players = dict()
     next_player_id_to_propose = 0
     while len(connected_players.values()) < NO_OF_PLAYERS:
         player_socket, player_address = server_socket.accept()
         print("Received a game join request.")
         print("Sending game invitation...")
-        player_socket.sendall(PlayerInvitationEvent(proposed_player_id=next_player_id_to_propose))
+        send_client_event(player_socket, PlayerInvitationEvent(proposed_player_id=next_player_id_to_propose))
         next_player_id_to_propose += 1
         print("Waiting for invitation to get accepted...")
         polled_event = poll_client_event(player_socket)
@@ -51,6 +60,14 @@ def main():
                                                                                                        polled_event.invitation_event.proposed_player_id,
                                                                                                        polled_event.player_name))
             # send game lobby update event to all the players
+            lobby_update_message = f"HOST_MESSAGE:: In Lobby {', '.join(get_connected_players_names())}."
+            players_remaining_to_join = NO_OF_PLAYERS - len(connected_players)
+            if players_remaining_to_join <= 0:
+                lobby_update_message = f"{lobby_update_message} All players have joined."
+            else:
+                lobby_update_message = f"{lobby_update_message} Waiting for {players_remaining_to_join} players to join."
+            broadcast_event_to_all_players(GenericGameUpdateEvent(
+                update_message=lobby_update_message))
         else:
             print(f"Unexpected event received, was expecting {PlayerInvitationEvent.__name__}")
 

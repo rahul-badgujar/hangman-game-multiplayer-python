@@ -7,3 +7,7 @@ class PlayerConnection:
     def __init__(self, _socket: socket, player: HangmanPlayer = None):
         self._socket = _socket
         self.player = player
+
+    @property
+    def socket(self):
+        return self._socket
