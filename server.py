@@ -26,9 +26,34 @@ def main():
     host = socket.gethostname()
     port = HOST_PORT
     server_socket.bind((host, port))
-    print(f"New Hangman Game started at {host}:{port}")
+    print(f"New Hangman Game started at {host}:{port} \n")
     # Listen for incoming connections
     server_socket.listen(NO_OF_PLAYERS)
+
+    # Print game title
+    print("  _    _                                          ")
+    print(" | |  | |                                         ")
+    print(" | |__| | __ _ _ __   __ _ _ __ ___   __ _ _ __   ")
+    print(" |  __  |/ _` | '_ \ / _` | '_ ` _ \ / _` | '_ \  ")
+    print(" | |  | | (_| | | | | (_| | | | | | | (_| | | | | ")
+    print(" |_|  |_|\__,_|_| |_|\__, |_| |_| |_|\__,_|_| |_| ")
+    print("                      __/ |                       ")
+    print("                     |___/                        ")
+    print("  _____                                           ")
+    print(" / ____|                                          ")
+    print("| |  __  __ _ _ __ ___   ___                      ")
+    print("| | |_ |/ _` | '_ ` _ \ / _ \                     ")
+    print("| |__| | (_| | | | | | |  __/                     ")
+    print(" \_____|\__,_|_| |_| |_|\___|                     ")
+    print("                                                  ")
+
+    # Print game details
+    print("ABOUT GAME ")
+    print("- This is a modified version of The Hangman Game to support multiplayer gaming.")
+    print(f"- Game will start once all the {NO_OF_PLAYERS} have joined in the lobby.")
+    print("- Each player will be guessing the same word.")
+    print("- The first one to guess the word correctly will be declared as winner of the game.")
+    print("- Turns will be played one by one. \n\n")
 
     # To store connections from players
     connected_players = dict()
@@ -37,8 +62,8 @@ def main():
         client_socket.sendall(encode_event(event))
 
     def broadcast_event_to_all_players(event: Event):
-        for player_connection in connected_players.values():
-            send_client_event(player_connection.socket, event)
+        for _player_connection in connected_players.values():
+            send_client_event(_player_connection.socket, event)
 
     def poll_client_event(client_socket: socket):
         received_data = client_socket.recv(1024)
@@ -78,7 +103,7 @@ def main():
 
     # Generate the word for the game
     word = get_word()
-    print(f"Selected word for game is {word}")
+    print(f"DEBUG:: Selected word for game is {word}")
 
     game_start_message = f"HOST: Game has started. You have to guess a word of {len(word)} characters."
     broadcast_event_to_all_players(HostMessageEvent(update_message=game_start_message))
@@ -114,6 +139,7 @@ def main():
                 # send game over event to all
                 broadcast_event_to_all_players(GameOverEvent())
                 game_completed = True
+                print(f"DEBUG:: Game Over")
                 break
 
     # Close the sockets
